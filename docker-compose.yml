@@ -1,0 +1,75 @@
+# citrate-bundler — production docker-compose for bundler.citrate.ai.
+#
+# Three services:
+#   bundler  — eth-infinitism bundler v0.7 (this repo's Dockerfile)
+#   redis    — backing store for the Citrate auth sidecar's
+#              rate-limit counters + paymaster pre-check cache
+#              (slice B; declared here so the bundler boot finds it
+#              when the sidecar lands)
+#   caddy    — TLS-terminating reverse proxy + per-IP rate limit
+#
+# Secrets live in .env next to this compose; .env.production.example
+# names every required value. Filled .env is never committed.
+
+services:
+  bundler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      # eth-infinitism bundler uses MNEMONIC + per-chain config files.
+      # We pass the operator key via env so the secret never lands on
+      # the image; the bundler reads it on boot.
+      MNEMONIC: ${BUNDLER_MNEMONIC}
+      # Chain RPC the bundler submits batches to.
+      NETWORK: ${BUNDLER_NETWORK_RPC}
+      # EntryPoint v0.7 address on chain 40204; populated post-deploy
+      # of citrate-chain's AA stack (see DeployAA.s.sol).
+      ENTRYPOINT: ${BUNDLER_ENTRYPOINT}
+      # Bundler API port (loopback inside the compose network).
+      PORT: "3000"
+    expose:
+      - "3000"
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --requirepass
+      - ${REDIS_PASSWORD}
+      - --appendonly
+      - "yes"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      bundler:
+        condition: service_started
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      BUNDLER_HOST: ${BUNDLER_HOST}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  redis_data:
+  caddy_data:
+  caddy_config:

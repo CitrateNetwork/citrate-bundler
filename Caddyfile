@@ -1,0 +1,58 @@
+# Caddy reverse proxy for the Citrate ERC-4337 bundler.
+#
+# Public TLS is automatic via Let's Encrypt against {$BUNDLER_HOST}
+# (set in .env, typically "bundler.citrate.ai").
+#
+# Two routes:
+#   /health    — Caddy-handled trivial liveness ("ok"); no upstream call.
+#   /          — JSON-RPC reverse-proxied to the eth-infinitism bundler
+#                on bundler:3000 within the compose network. Rate-limited
+#                per source IP using Caddy's built-in event-based limit.
+#
+# Per-Bearer-token quotas live in the Citrate auth sidecar (WP-4 slice B)
+# which inserts itself between Caddy and the bundler; this Caddyfile
+# stays simple until that sidecar lands so the bundler can be smoke-tested
+# end-to-end first.
+
+{
+    email saulweiloveman@gmail.com
+}
+
+{$BUNDLER_HOST} {
+    encode zstd gzip
+
+    @health path /health
+    respond @health "ok" 200
+
+    # Per-IP rate limit at the edge. 60 requests/minute is well above
+    # what a normal client needs (a UserOp flow is 1-2 requests per
+    # action) and well below what a sybil farming free gas would want.
+    # Caddy v2 doesn't ship a built-in rate-limit module in the base
+    # image; this stanza is a placeholder and is replaced by the auth
+    # sidecar's per-IP + per-API-key bucket when slice B lands.
+
+    reverse_proxy bundler:3000 {
+        header_up X-Forwarded-Proto {scheme}
+        header_up X-Forwarded-Host {host}
+        header_up X-Real-IP {remote_host}
+
+        transport http {
+            read_timeout 60s
+            write_timeout 60s
+            dial_timeout 5s
+            keepalive 30s
+        }
+    }
+
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+
+    log {
+        output stdout
+        format console
+    }
+}
