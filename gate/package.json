@@ -1,0 +1,26 @@
+{
+  "name": "citrate-bundler-gate",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Auth + rate-limit + paymaster-precheck + metrics gate in front of the eth-infinitism bundler (EW-S1 WP-4 slice B)",
+  "type": "module",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/server.ts",
+    "start": "node dist/server.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "mint-key": "tsx scripts/mint-key.ts"
+  },
+  "dependencies": {
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "ioredis-mock": "^8.9.0",
+    "tsx": "^4.16.0",
+    "typescript": "^5.5.0",
+    "vitest": "^2.1.0"
+  }
+}
