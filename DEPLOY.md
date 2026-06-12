@@ -150,3 +150,25 @@ Until slice B lands, the bundler accepts any JSON-RPC client that can
 reach `bundler.citrate.ai` — Caddy edge rate-limit is the only check.
 Do not list the URL in any public documentation that a non-Citrate
 client could find before slice B.
+
+## WP-4 slice B — the gate (2026-06-11)
+
+`gate/` is the Citrate sidecar between Caddy and the bundler:
+`bk_` API keys (mint with `cd gate && GATE_REDIS_URL=… npm run mint-key -- "<label>"`),
+Redis-backed per-IP + per-key rate limits, the CitratePaymaster
+pre-check on `eth_sendUserOperation`, structured JSON logs, `/metrics`
+(droplet-internal) and threshold alerts (low paymaster deposit / low
+operator balance → `GATE_ALERT_WEBHOOK_URL`).
+
+Deploy delta on the droplet:
+
+```bash
+cd /opt/citrate-bundler
+git pull                       # or rsync
+nano .env                      # fill the new "Gate" block from .env.production.example
+docker compose up -d --build   # builds the gate image, reroutes Caddy /rpc through it
+curl -s https://bundler.citrate.ai/healthz   # {"status":"ok","redis":true,"upstream":true}
+docker compose exec gate wget -qO- http://localhost:3001/metrics | head
+```
+
+R3 gate satisfied: metrics + alerts exist BEFORE any RP integrates.

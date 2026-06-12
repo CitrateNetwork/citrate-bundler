@@ -3,16 +3,16 @@
 # Public TLS is automatic via Let's Encrypt against {$BUNDLER_HOST}
 # (set in .env, typically "bundler.citrate.ai").
 #
-# Two routes:
+# Routes:
 #   /health    — Caddy-handled trivial liveness ("ok"); no upstream call.
-#   /          — JSON-RPC reverse-proxied to the eth-infinitism bundler
-#                on bundler:3000 within the compose network. Rate-limited
-#                per source IP using Caddy's built-in event-based limit.
+#   /healthz   — composite health from the gate (upstream bundler + Redis).
+#   /          — JSON-RPC proxied through the Citrate GATE (WP-4 slice B:
+#                bk_ API keys, per-IP + per-key rate limits, paymaster
+#                pre-check, structured logs) which forwards to the
+#                eth-infinitism bundler on bundler:3000.
 #
-# Per-Bearer-token quotas live in the Citrate auth sidecar (WP-4 slice B)
-# which inserts itself between Caddy and the bundler; this Caddyfile
-# stays simple until that sidecar lands so the bundler can be smoke-tested
-# end-to-end first.
+# /metrics is intentionally NOT routed publicly — scrape it from the
+# droplet: docker compose exec gate wget -qO- http://localhost:3001/metrics
 
 {
     email saulweiloveman@gmail.com
@@ -24,14 +24,13 @@
     @health path /health
     respond @health "ok" 200
 
-    # Per-IP rate limit at the edge. 60 requests/minute is well above
-    # what a normal client needs (a UserOp flow is 1-2 requests per
-    # action) and well below what a sybil farming free gas would want.
-    # Caddy v2 doesn't ship a built-in rate-limit module in the base
-    # image; this stanza is a placeholder and is replaced by the auth
-    # sidecar's per-IP + per-API-key bucket when slice B lands.
+    @metrics path /metrics
+    respond @metrics "metrics are not public" 403
 
-    reverse_proxy bundler:3000 {
+    # Per-IP (60/min anonymous) + per-API-key (600/min) rate limits,
+    # bk_ key auth, and the paymaster pre-check live in the gate
+    # (Redis-backed) — see gate/src/server.ts.
+    reverse_proxy gate:3001 {
         header_up X-Forwarded-Proto {scheme}
         header_up X-Forwarded-Host {host}
         header_up X-Real-IP {remote_host}

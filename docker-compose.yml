@@ -32,7 +32,36 @@ services:
     expose:
       - "3000"
     depends_on:
+      # EW-S1 WP-4 slice B: the Citrate gate — bk_ API keys, per-IP +
+  # per-key rate limits (Redis), paymaster pre-check, structured logs,
+  # /metrics + threshold alerts. Caddy proxies /rpc through it.
+  gate:
+    build:
+      context: ./gate
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production
+      GATE_PORT: "3001"
+      GATE_UPSTREAM_URL: http://bundler:3000/rpc
+      GATE_REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+      BUNDLER_NETWORK_RPC: ${BUNDLER_NETWORK_RPC}
+      BUNDLER_ENTRYPOINT: ${BUNDLER_ENTRYPOINT}
+      CITRATE_AA_PAYMASTER: ${CITRATE_AA_PAYMASTER}
+      BUNDLER_OPERATOR_ADDRESS: ${BUNDLER_OPERATOR_ADDRESS:-}
+      GATE_REQUIRE_API_KEY: ${GATE_REQUIRE_API_KEY:-false}
+      GATE_IP_LIMIT_PER_MINUTE: ${GATE_IP_LIMIT_PER_MINUTE:-60}
+      GATE_KEY_LIMIT_PER_MINUTE: ${GATE_KEY_LIMIT_PER_MINUTE:-600}
+      GATE_ALERT_WEBHOOK_URL: ${GATE_ALERT_WEBHOOK_URL:-}
+    expose:
+      - "3001"
+    depends_on:
       redis:
+        condition: service_healthy
+      bundler:
+        condition: service_started
+
+  redis:
         condition: service_healthy
 
   redis:
