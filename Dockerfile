@@ -20,7 +20,13 @@ ARG BUNDLER_REF=releases/v0.7
 # ---- 1. builder ----
 FROM node:22-alpine AS builder
 WORKDIR /build
-RUN apk add --no-cache git python3 make g++
+# node-gyp (native deps like @parcel/watcher, needed on arm64/musl where no
+# prebuilt ships) requires Python with `distutils`. Alpine's python3 is now 3.12,
+# which REMOVED distutils — `py3-setuptools` restores the shim so node-gyp's
+# configure step works. `linux-headers` provides the system headers the native
+# compile needs. (Without these the build dies at `yarn install` with
+# `ModuleNotFoundError: No module named 'distutils'`.)
+RUN apk add --no-cache git python3 py3-setuptools make g++ linux-headers
 
 # Clone the upstream bundler at the pinned ref. `--recurse-submodules`
 # is REQUIRED because upstream pulls the `account-abstraction` contracts
