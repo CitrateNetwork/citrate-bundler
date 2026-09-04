@@ -97,63 +97,16 @@ WORKDIR /app
 # Run as the unprivileged `node` user (uid/gid 1000) the base image ships.
 COPY --from=builder --chown=node:node /build/bundler /app
 
-# Entrypoint script — templates the upstream's localconfig/bundler.config.json
-# + mnemonic.txt from our compose env vars before invoking the real bundler.
-# The upstream bundler reads its config from disk (the only injection point
-# is `--config <path>`); we write the file at boot rather than baking it in
-# so secrets stay out of the image.
+# Entrypoint script (scripts/citrate-bundler-entrypoint.sh) — templates the
+# upstream's localconfig/bundler.config.json + mnemonic.txt from our compose
+# env vars, enforces the BUN-B-001 boot guard (refuses --unsafe on an
+# anonymous RPC front door), then execs the real bundler. Kept as a real file
+# (not an inline heredoc) so the boot guard + generated config floors are
+# testable without a Docker build. The upstream bundler reads its config from
+# disk (the only injection point is `--config <path>`); we write the file at
+# boot rather than baking it in so secrets stay out of the image.
 USER root
-COPY --chown=root:root <<'ENTRYPOINT_EOF' /usr/local/bin/citrate-bundler-entrypoint.sh
-#!/bin/sh
-set -eu
-
-: "${MNEMONIC:?MNEMONIC env required (12-word BIP-39)}"
-: "${NETWORK:?NETWORK env required (chain JSON-RPC URL)}"
-: "${ENTRYPOINT:?ENTRYPOINT env required (chain EntryPoint address)}"
-: "${PORT:=3000}"
-: "${BENEFICIARY:=}"
-: "${AUTO_BUNDLE_INTERVAL:=3}"
-
-CFG_DIR=/app/packages/bundler/localconfig
-mkdir -p "${CFG_DIR}"
-
-printf '%s\n' "${MNEMONIC}" > "${CFG_DIR}/mnemonic.txt"
-chmod 0600 "${CFG_DIR}/mnemonic.txt"
-
-# If no beneficiary supplied, the bundler defaults to the operator EOA.
-# Leave the field as an empty string to trigger that.
-cat > "${CFG_DIR}/bundler.config.json" <<JSON
-{
-  "gasFactor": "1",
-  "port": "${PORT}",
-  "network": "${NETWORK}",
-  "entryPoint": "${ENTRYPOINT}",
-  "beneficiary": "${BENEFICIARY}",
-  "minBalance": "1",
-  "mnemonic": "./localconfig/mnemonic.txt",
-  "maxBundleGas": 5000000,
-  "minStake": "1",
-  "minUnstakeDelay": 0,
-  "autoBundleInterval": ${AUTO_BUNDLE_INTERVAL},
-  "autoBundleMempoolSize": 10
-}
-JSON
-
-cd /app/packages/bundler
-# `--unsafe` skips the bundler's debug_traceCall full-validation step.
-# Citrate chain RPC doesn't expose debug_traceCall (it's a Geth/Erigon-only
-# trace method); for our single-tenant deployment (all UserOps originate
-# from auth.citrate.ai's verified clients, not a public mempool) the
-# unsafe-mode signature + nonce + paymaster validation is sufficient.
-# When the chain gains debug_traceCall, drop `--unsafe`.
-#
-# `--auto` enables the autobundling loop (otherwise the bundler accepts
-# UserOps but never submits batches; the upstream README treats `--auto`
-# as the production default).
-#
-# Drop privileges to `node` for the runtime.
-exec su -s /bin/sh node -c "node dist/src/exec.js --config ${CFG_DIR}/bundler.config.json --unsafe --auto"
-ENTRYPOINT_EOF
+COPY --chown=root:root scripts/citrate-bundler-entrypoint.sh /usr/local/bin/citrate-bundler-entrypoint.sh
 RUN chmod 0755 /usr/local/bin/citrate-bundler-entrypoint.sh && apk add --no-cache su-exec || true
 
 EXPOSE 3000

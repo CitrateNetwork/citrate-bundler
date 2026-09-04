@@ -55,6 +55,15 @@ chmod 0600 .env
 #    BUNDLER_ENTRYPOINT=0x...               # from the EntryPoint deploy
 #    BUNDLER_MNEMONIC=<bip39-12-words>      # operator wallet
 #    REDIS_PASSWORD=$(openssl rand -hex 32)
+#
+#    BUN-B-001 boot guard: the bundler runs --unsafe (no ERC-7562 checking)
+#    because chain 40204 has no debug_traceCall yet. The container REFUSES to
+#    boot when BUNDLER_UNSAFE=true AND GATE_REQUIRE_API_KEY!=true — an unsafe
+#    bundler on an anonymous /rpc is a funds-loss DoS. So set EITHER
+#    GATE_REQUIRE_API_KEY=true (mandate a bk_ key + restrict egress, the
+#    default in the template) OR BUNDLER_UNSAFE=false (once debug_traceCall
+#    lands). CI: `cd gate && npm run check:floors` asserts the generated
+#    bundler.config.json stays at the ERC-7562 reputation floors.
 $EDITOR .env
 
 # 3) Bring it up.
