@@ -1,0 +1,9 @@
+### BUN-B-001 RED evidence — pinned code (main @ ad22cb9)
+
+== RED-1: pinned entrypoint launches --unsafe on an ANONYMOUS front door ==
+$ MNEMONIC=... NETWORK=... ENTRYPOINT=... GATE_REQUIRE_API_KEY=false sh pinned-entrypoint.sh
+LAUNCH: node dist/src/exec.js --config /tmp/tmp.1kXZ1IUKdM/bundler.config.json --unsafe --auto
+  -> exit=0  (no boot guard: it STARTS unsafe with no API key — the vulnerability)
+
+== RED-2: pinned generated config is below the ERC-7562 floors ==
+  -> exit=1  (checker FAILS: minStake=1 wei, minUnstakeDelay=0)

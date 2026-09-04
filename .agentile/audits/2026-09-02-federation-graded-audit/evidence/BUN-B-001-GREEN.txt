@@ -1,0 +1,12 @@
+### BUN-B-001 GREEN evidence — fixed code (branch fix/wp-bun-unsafe-boot-guard)
+
+== GREEN-1: fixed entrypoint REFUSES unsafe + anonymous ==
+  -> exit=1 (refused)
+
+== GREEN-2: fixed entrypoint STARTS with unsafe + mandatory key ==
+DRY_RUN launch: node dist/src/exec.js --config /tmp/tmp.1xcPK9LFf7/bundler.config.json --unsafe --auto
+  -> exit=0
+
+== GREEN-3: generated config now at ERC-7562 floors ==
+check-config-floors: OK — minStake >= 1000000000000000000 wei, minUnstakeDelay >= 86400 s (/tmp/tmp.1xcPK9LFf7/bundler.config.json)
+  -> exit=0

@@ -29,6 +29,15 @@ services:
       ENTRYPOINT: ${BUNDLER_ENTRYPOINT}
       # Bundler API port (loopback inside the compose network).
       PORT: "3000"
+      # BUN-B-001 boot guard. --unsafe disables ALL ERC-7562 opcode/storage/
+      # stake checking; it is only permissible when the /rpc front door is NOT
+      # anonymous, i.e. the gate mandates a bk_ API key. The entrypoint refuses
+      # to start when BUNDLER_UNSAFE=true AND GATE_REQUIRE_API_KEY!=true, so
+      # these two MUST agree with the gate service below. Default posture
+      # (unsafe + no key) is fail-closed: the container will refuse to boot
+      # until the operator picks a safe combination.
+      BUNDLER_UNSAFE: ${BUNDLER_UNSAFE:-true}
+      GATE_REQUIRE_API_KEY: ${GATE_REQUIRE_API_KEY:-false}
     expose:
       - "3000"
     depends_on:
