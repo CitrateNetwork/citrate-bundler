@@ -12,6 +12,8 @@
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
     "check:floors": "node ../scripts/check-config-floors.mjs",
+    "check:compose": "node ../scripts/check-compose.mjs",
+    "check:pins": "node ../scripts/check-image-pins.mjs",
     "mint-key": "tsx scripts/mint-key.ts"
   },
   "dependencies": {

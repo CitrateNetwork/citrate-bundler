@@ -137,13 +137,34 @@ export function createGateHandler(deps: GateDeps) {
       rpcError(res, null, -32600, 'payload too large');
       return;
     }
-    let rpc: JsonRpcRequest;
+    let parsed: unknown;
     try {
-      rpc = JSON.parse(raw) as JsonRpcRequest;
+      parsed = JSON.parse(raw);
     } catch {
       rpcError(res, null, -32700, 'parse error');
       return;
     }
+    // ── Batch guard (BUN-B-002) ────────────────────────────────────
+    // A JSON-RPC batch (top-level array) makes `rpc.method` undefined, so
+    // the method allow-list + paymaster pre-check below would be skipped and
+    // the raw array proxied verbatim to an upstream that loops over every
+    // element — relaying sponsored ops the pre-check would reject and turning
+    // one rate-limit tick into up to ~3400 upstream ops. The gate polices one
+    // JSON-RPC operation per request; batch bodies are refused so the gate's
+    // policy view can never diverge from the upstream's execution view
+    // (invariant: rate-limit debits == operations forwarded).
+    if (Array.isArray(parsed)) {
+      metrics.inc('bundler_gate_requests_total', { method: 'batch', outcome: 'rejected' });
+      log('warn', 'batch request rejected', { ip: clientIp(req), count: parsed.length });
+      rpcError(
+        res,
+        null,
+        -32600,
+        'batch requests are not supported; send one JSON-RPC operation per request',
+      );
+      return;
+    }
+    const rpc = parsed as JsonRpcRequest;
     const id = rpc.id ?? null;
     const method = rpc.method ?? 'unknown';
     const ip = clientIp(req);
