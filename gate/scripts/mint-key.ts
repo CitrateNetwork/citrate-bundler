@@ -24,10 +24,11 @@ async function main(): Promise<void> {
   const label = process.argv[2] ?? '(unlabelled)';
   const redis = new Redis(url);
   try {
-    const key = await mintApiKey(redis);
+    const key = await mintApiKey(redis, label);
     console.log(`minted bundler API key for ${label}:`);
     console.log(key);
     console.log('(stored as SHA-256 only — this is the last time the plaintext exists)');
+    console.log(`revoke later with: npm run revoke-key -- "${label}"`);
   } finally {
     redis.disconnect();
   }

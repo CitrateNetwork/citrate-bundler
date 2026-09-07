@@ -21,7 +21,32 @@ import { checkRateLimit, type RateLimitRedis } from './ratelimit.js';
 import { precheckUserOp, type RpcUserOpLike } from './precheck.js';
 import { createGateMetrics, type Metrics } from './metrics.js';
 import { AlertWatcher } from './alerts.js';
+import { isTrustedProxy } from './netmatch.js';
 import { log } from './log.js';
+
+/**
+ * BUN-B-012: the gate proxies *any* JSON-RPC method to the upstream bundler,
+ * so the privileged `debug_bundler_*` family (mempool dumping, forced bundle
+ * submission, reputation whitelisting, bundling halt) was reachable by any
+ * caller the moment an upstream default flips. We now enforce an explicit
+ * allow-list of the public ERC-4337 methods at the edge and reject everything
+ * else with -32601, independent of upstream behaviour.
+ */
+const ALLOWED_METHODS = new Set<string>([
+  'eth_sendUserOperation',
+  'eth_estimateUserOperationGas',
+  'eth_getUserOperationByHash',
+  'eth_getUserOperationReceipt',
+  'eth_supportedEntryPoints',
+  'eth_chainId',
+  'web3_clientVersion',
+]);
+
+/** BUN-B-014: bound every outbound call so a slow/wedged peer cannot pin a handler. */
+const UPSTREAM_TIMEOUT_MS = 30_000;
+const CHAIN_PROBE_TIMEOUT_MS = 5_000;
+/** BUN-B-008: at most one upstream health probe per this window. */
+const HEALTH_CACHE_MS = 5_000;
 
 interface JsonRpcRequest {
   jsonrpc?: string;
@@ -65,14 +90,30 @@ function rpcError(
   respondJson(res, 200, { jsonrpc: '2.0', id, error: { code, message } });
 }
 
-function clientIp(req: IncomingMessage): string {
+/**
+ * BUN-B-009: derive the rate-limit identity. `X-Real-IP` / `X-Forwarded-For`
+ * are client-controllable, so they are trusted ONLY when the direct socket
+ * peer is a configured trusted proxy (the compose-network Caddy hop). For any
+ * other peer — a second ingress, a future `ports:` mapping, a direct
+ * connection to :3001 — the raw socket address is used, so a header spoof
+ * cannot mint a fresh bucket per request. When a trusted proxy forwards
+ * multiple hops in X-Forwarded-For, the RIGHT-most (nearest, least
+ * attacker-controllable) hop is taken rather than the left-most.
+ */
+function clientIp(req: IncomingMessage, trustedProxies: string[]): string {
+  const socketIp = req.socket.remoteAddress ?? 'unknown';
+  if (!isTrustedProxy(socketIp, trustedProxies)) {
+    return socketIp;
+  }
   const real = req.headers['x-real-ip'];
-  if (typeof real === 'string' && real.length > 0) return real;
+  if (typeof real === 'string' && real.length > 0) return real.trim();
   const fwd = req.headers['x-forwarded-for'];
   if (typeof fwd === 'string' && fwd.length > 0) {
-    return fwd.split(',')[0]?.trim() ?? 'unknown';
+    const hops = fwd.split(',').map((h) => h.trim()).filter((h) => h.length > 0);
+    const rightmost = hops[hops.length - 1];
+    if (rightmost) return rightmost;
   }
-  return req.socket.remoteAddress ?? 'unknown';
+  return socketIp;
 }
 
 function bearerToken(req: IncomingMessage): string | undefined {
@@ -86,6 +127,52 @@ function bearerToken(req: IncomingMessage): string | undefined {
 export function createGateHandler(deps: GateDeps) {
   const { config, redis, metrics } = deps;
 
+  // BUN-B-008: /healthz is unauthenticated and (per Caddyfile) public, and
+  // each probe costs one upstream JSON-RPC round-trip + one Redis PING. Cache
+  // the composite result so a flood of concurrent GETs collapses to at most
+  // one real probe per HEALTH_CACHE_MS window instead of amplifying 1:2 load
+  // onto the money path. A single in-flight promise deduplicates the thundering
+  // herd within a window.
+  let healthCache: { at: number; redis: boolean; upstream: boolean } | undefined;
+  let healthInFlight: Promise<{ redis: boolean; upstream: boolean }> | undefined;
+
+  async function probeHealth(): Promise<{ redis: boolean; upstream: boolean }> {
+    let redisOk = false;
+    let upstreamOk = false;
+    try {
+      redisOk = (await redis.ping()) === 'PONG';
+    } catch {
+      redisOk = false;
+    }
+    try {
+      const r = await fetch(config.upstreamUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId' }),
+        signal: AbortSignal.timeout(CHAIN_PROBE_TIMEOUT_MS),
+      });
+      upstreamOk = r.ok;
+    } catch {
+      upstreamOk = false;
+    }
+    return { redis: redisOk, upstream: upstreamOk };
+  }
+
+  async function health(): Promise<{ redis: boolean; upstream: boolean }> {
+    const now = Date.now();
+    if (healthCache && now - healthCache.at < HEALTH_CACHE_MS) {
+      return { redis: healthCache.redis, upstream: healthCache.upstream };
+    }
+    if (!healthInFlight) {
+      healthInFlight = probeHealth().then((r) => {
+        healthCache = { at: Date.now(), ...r };
+        healthInFlight = undefined;
+        return r;
+      });
+    }
+    return healthInFlight;
+  }
+
   return async function handle(
     req: IncomingMessage,
     res: ServerResponse,
@@ -93,23 +180,7 @@ export function createGateHandler(deps: GateDeps) {
     const started = Date.now();
 
     if (req.method === 'GET' && req.url === '/healthz') {
-      let redisOk = false;
-      let upstreamOk = false;
-      try {
-        redisOk = (await redis.ping()) === 'PONG';
-      } catch {
-        redisOk = false;
-      }
-      try {
-        const r = await fetch(config.upstreamUrl, {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_chainId' }),
-        });
-        upstreamOk = r.ok;
-      } catch {
-        upstreamOk = false;
-      }
+      const { redis: redisOk, upstream: upstreamOk } = await health();
       metrics.setGauge('bundler_gate_up', redisOk && upstreamOk ? 1 : 0);
       respondJson(res, redisOk && upstreamOk ? 200 : 503, {
         status: redisOk && upstreamOk ? 'ok' : 'degraded',
@@ -125,7 +196,10 @@ export function createGateHandler(deps: GateDeps) {
       return;
     }
 
-    if (req.method !== 'POST' || req.url !== '/rpc') {
+    // CB-04(a): ERC-4337 clients and the documented verify curls POST to the
+    // JSON-RPC root (`/`); the gate's canonical path is `/rpc`. Accept both so
+    // the advertised endpoint and `/rpc` behave identically.
+    if (req.method !== 'POST' || (req.url !== '/rpc' && req.url !== '/')) {
       respondJson(res, 404, { error: 'not_found' });
       return;
     }
@@ -155,7 +229,10 @@ export function createGateHandler(deps: GateDeps) {
     // (invariant: rate-limit debits == operations forwarded).
     if (Array.isArray(parsed)) {
       metrics.inc('bundler_gate_requests_total', { method: 'batch', outcome: 'rejected' });
-      log('warn', 'batch request rejected', { ip: clientIp(req), count: parsed.length });
+      log('warn', 'batch request rejected', {
+        ip: clientIp(req, config.trustedProxies),
+        count: parsed.length,
+      });
       rpcError(
         res,
         null,
@@ -167,7 +244,19 @@ export function createGateHandler(deps: GateDeps) {
     const rpc = parsed as JsonRpcRequest;
     const id = rpc.id ?? null;
     const method = rpc.method ?? 'unknown';
-    const ip = clientIp(req);
+    const ip = clientIp(req, config.trustedProxies);
+
+    // ── Method allow-list (BUN-B-012) ──────────────────────────────
+    // Reject anything outside the public ERC-4337 surface at the edge, so the
+    // upstream `debug_bundler_*` family can never be reached through the gate
+    // regardless of the upstream's own default. Checked before the paymaster
+    // pre-check but after body parsing so the reject is a clean JSON-RPC error.
+    if (!ALLOWED_METHODS.has(method)) {
+      metrics.inc('bundler_gate_requests_total', { method: 'other', outcome: 'rejected' });
+      log('warn', 'method not allowed', { ip, method });
+      rpcError(res, id, -32601, `method ${method} is not supported by this gate`);
+      return;
+    }
 
     // ── API key (item 12) ──────────────────────────────────────────
     const key = bearerToken(req);
@@ -218,6 +307,7 @@ export function createGateHandler(deps: GateDeps) {
           chainRpcUrl: config.chainRpcUrl,
           paymaster: config.paymaster,
           ...(config.entryPoint ? { entryPoint: config.entryPoint } : {}),
+          failOpen: config.precheckFailOpen,
         },
         op,
       );
@@ -238,6 +328,7 @@ export function createGateHandler(deps: GateDeps) {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: raw,
+        signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
       });
       const body = await upstream.text();
       metrics.inc('bundler_gate_requests_total', {
@@ -287,6 +378,10 @@ export function main(): void {
       if (!res.headersSent) respondJson(res, 500, { error: 'internal' });
     });
   });
+  // BUN-B-014: cap how long a client may hold a connection open sending its
+  // request, so a slow-loris style upload cannot pin handlers indefinitely.
+  server.requestTimeout = 30_000;
+  server.headersTimeout = 15_000;
   server.listen(config.port, () => {
     log('info', 'bundler gate listening', {
       port: config.port,
