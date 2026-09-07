@@ -4,18 +4,21 @@
 # bundler (Apache 2.0) into a runnable Citrate-flavoured image.
 #
 # v0.7-aligned bundler is shipped via the upstream account-abstraction
-# monorepo (https://github.com/eth-infinitism/bundler) at the
-# `releases/v0.7` branch. We pin to a specific commit via build arg
-# so an upstream main-branch shift never silently changes our binary.
+# monorepo (https://github.com/eth-infinitism/bundler). We pin to a specific
+# COMMIT SHA (not the moving `releases/v0.7` branch head) and fetch that exact
+# object, so an upstream branch advance / force-push can never silently change
+# our binary. `scripts/check-image-pins.mjs` (BUN-B-004 tripwire) fails CI if
+# BUNDLER_REF is ever set back to a branch/tag name.
 #
 # Multi-stage:
 #  1. builder — clone upstream + yarn install + tsc → dist/
 #  2. runtime — node:22-alpine + dist + production deps only
 
 ARG BUNDLER_REPO=https://github.com/eth-infinitism/bundler.git
-# v0.7-tagged release. Override at build time with --build-arg if a
-# newer fix lands and we want to take it.
-ARG BUNDLER_REF=releases/v0.7
+# Pinned to the tip of releases/v0.7 as of 2026-09-06
+# (git ls-remote eth-infinitism/bundler releases/v0.7). Bump this SHA
+# deliberately in a reviewed PR to take a newer upstream fix.
+ARG BUNDLER_REF=1868538f1d7678576291d2ecabb4443c797ad133
 
 # ---- 1. builder ----
 FROM node:22-alpine AS builder
@@ -28,22 +31,31 @@ WORKDIR /build
 # `ModuleNotFoundError: No module named 'distutils'`.)
 RUN apk add --no-cache git python3 py3-setuptools make g++ linux-headers
 
-# Clone the upstream bundler at the pinned ref. `--recurse-submodules`
-# is REQUIRED because upstream pulls the `account-abstraction` contracts
-# repo in as a submodule + its prepack output is consumed by the
-# bundler workspace at typecheck time.
+# Fetch the upstream bundler at the pinned COMMIT SHA. `git clone --branch`
+# only accepts a branch/tag name, so to pin to a SHA we init + fetch the exact
+# object (GitHub serves reachable commit SHAs). Submodules are pulled AFTER
+# checkout because the `account-abstraction` contracts submodule + its prepack
+# output are consumed by the bundler workspace at typecheck time.
 ARG BUNDLER_REPO
 ARG BUNDLER_REF
-RUN git clone --depth 1 --branch ${BUNDLER_REF} --recurse-submodules --shallow-submodules ${BUNDLER_REPO} bundler
+RUN git init bundler \
+ && cd bundler \
+ && git remote add origin ${BUNDLER_REPO} \
+ && git fetch --depth 1 origin ${BUNDLER_REF} \
+ && git checkout --detach FETCH_HEAD \
+ && git submodule update --init --recursive --depth 1
 
 WORKDIR /build/bundler
 # Upstream uses bash in its prepack/postpack scripts; alpine ships sh-only.
 RUN apk add --no-cache bash
 # Yarn is the upstream's package manager.
 RUN corepack enable && corepack prepare yarn@stable --activate
-# Install workspace deps. `--immutable` then a permissive retry in case
-# the lockfile drifted between releases/v0.7 and a transient dep.
-RUN yarn install --immutable || yarn install
+# Install workspace deps with lockfile integrity ENFORCED. We pin to an exact
+# upstream SHA above, so `yarn.lock` at that commit is authoritative; a
+# `--immutable` failure means the dependency graph does not match the pinned
+# lockfile — the exact signal of a supply-chain substitution — and MUST be
+# fatal, not silently retried without integrity enforcement (BUN-B-004).
+RUN yarn install --immutable
 # Upstream's `preprocess` is the canonical "go-from-fresh-clone-to-
 # typechecked-monorepo" step. It does:
 #   1. submodule-update (no-op for us, already recursed at clone)

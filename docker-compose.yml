@@ -41,7 +41,10 @@ services:
     expose:
       - "3000"
     depends_on:
-      # EW-S1 WP-4 slice B: the Citrate gate — bk_ API keys, per-IP +
+      redis:
+        condition: service_healthy
+
+  # EW-S1 WP-4 slice B: the Citrate gate — bk_ API keys, per-IP +
   # per-key rate limits (Redis), paymaster pre-check, structured logs,
   # /metrics + threshold alerts. Caddy proxies /rpc through it.
   gate:
@@ -69,9 +72,6 @@ services:
         condition: service_healthy
       bundler:
         condition: service_started
-
-  redis:
-        condition: service_healthy
 
   redis:
     image: redis:7-alpine
