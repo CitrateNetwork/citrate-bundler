@@ -66,8 +66,10 @@ function makeConfig(overrides: Partial<GateConfig> = {}): GateConfig {
     requireApiKey: false,
     ipLimitPerMinute: 60,
     keyLimitPerMinute: 600,
+    precheckFailOpen: false,
     paymasterDepositAlertWei: 0n,
     operatorBalanceAlertWei: 0n,
+    trustedProxies: [],
     ...overrides,
   };
 }

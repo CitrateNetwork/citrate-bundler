@@ -119,8 +119,10 @@ beforeAll(async () => {
     requireApiKey: false,
     ipLimitPerMinute: 60,
     keyLimitPerMinute: 600,
+    precheckFailOpen: false,
     paymasterDepositAlertWei: 0n,
     operatorBalanceAlertWei: 0n,
+    trustedProxies: [],
   };
   const handler = createGateHandler({
     config,
