@@ -51,9 +51,35 @@ function seriesKey(name: string, labels: Record<string, string>): string {
   if (entries.length === 0) return name;
   const rendered = entries
     .sort(([a], [b]) => (a < b ? -1 : 1))
-    .map(([k, v]) => `${k}="${v.replace(/"/g, '\\"')}"`)
+    .map(([k, v]) => `${k}="${escapeLabelValue(v)}"`)
     .join(',');
   return `${name}{${rendered}}`;
+}
+
+/**
+ * BUN-B-007: escape a Prometheus label VALUE per the exposition spec —
+ * backslash first, then double-quote and newline. Without this a value
+ * containing a newline (and, before the server's method allow-list, an
+ * attacker-controlled `method`) could append forged series to `/metrics`
+ * (e.g. a fake `bundler_gate_paymaster_deposit_wei`). The allow-list is the
+ * primary fix; this is defense-in-depth for every label value.
+ */
+export function escapeLabelValue(v: string): string {
+  return v.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+}
+
+/**
+ * BUN-B-013: Prometheus gauges are IEEE-754 doubles, so a raw `Number(wei)`
+ * loses precision above 2^53 wei (~0.009 SALT) — every realistic paymaster /
+ * operator balance renders wrong in its low-order digits, and any dashboard
+ * arithmetic (burn rate, days-of-runway) inherits the error. Export the value
+ * in SALT with milli-SALT resolution instead, which is lossless for any
+ * balance below ~9e15 SALT. The in-process alert comparison stays in bigint
+ * (alerts.ts) and is unaffected.
+ */
+export function weiToSalt(wei: bigint): number {
+  const milliSalt = wei / 10n ** 15n; // integer milli-SALT, stays < 2^53
+  return Number(milliSalt) / 1000;
 }
 
 /** The gate's metric registry, pre-described. */
@@ -64,8 +90,8 @@ export function createGateMetrics(): Metrics {
   m.describe('bundler_gate_unauthorized_total', 'Requests rejected for a missing/invalid API key');
   m.describe('bundler_gate_precheck_rejects_total', 'UserOps rejected by the paymaster pre-check');
   m.describe('bundler_gate_upstream_errors_total', 'Upstream bundler transport failures');
-  m.describe('bundler_gate_paymaster_deposit_wei', "CitratePaymaster's EntryPoint deposit");
-  m.describe('bundler_gate_operator_balance_wei', "Bundler operator EOA's native balance");
+  m.describe('bundler_gate_paymaster_deposit_salt', "CitratePaymaster's EntryPoint deposit (SALT, milli-SALT resolution)");
+  m.describe('bundler_gate_operator_balance_salt', "Bundler operator EOA's native balance (SALT, milli-SALT resolution)");
   m.describe('bundler_gate_up', '1 when the gate believes upstream+redis are healthy');
   return m;
 }
