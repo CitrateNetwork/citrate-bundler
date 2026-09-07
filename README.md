@@ -47,16 +47,26 @@ citrate-chain RPC at rpc.citrate.ai
 ## Public endpoints
 
 ```
-POST  https://bundler.citrate.ai/        — JSON-RPC 2.0
-GET   https://bundler.citrate.ai/health  — { "ok": true }
+POST  https://bundler.citrate.ai/rpc     — JSON-RPC 2.0 (the gate also accepts POST /)
+GET   https://bundler.citrate.ai/health  — Caddy liveness ("ok")
+GET   https://bundler.citrate.ai/healthz — composite health (upstream + Redis)
 ```
 
-Standard ERC-4337 methods (`eth_sendUserOperation`, etc.) +
-Citrate-specific:
+The gate enforces an explicit method allow-list (BUN-B-012): the public
+ERC-4337 surface only —
 
-- `citrate_getUserAddress(userId)` — predict the smart-wallet address
-  for a Citrate user id (mirrors `citrate-wallet-aa::predict_address`
-  in Rust + `CitrateWalletFactory.predictAddress` on-chain).
+- `eth_sendUserOperation`, `eth_estimateUserOperationGas`,
+  `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`,
+  `eth_supportedEntryPoints`, `eth_chainId`, `web3_clientVersion`.
+
+Everything else (including the upstream `debug_bundler_*` family) is rejected
+at the edge with `-32601`.
+
+> **Not implemented:** `citrate_getUserAddress(userId)` was advertised in an
+> earlier draft but has no implementation and is not on the allow-list. Smart-
+> wallet address prediction is done client-side via
+> `citrate-wallet-aa::predict_address` (Rust) / `CitrateWalletFactory.predictAddress`
+> (on-chain), not through the bundler.
 
 ## Deploy
 

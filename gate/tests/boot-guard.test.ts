@@ -12,7 +12,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, writeFileSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 
@@ -89,6 +89,29 @@ describe('BUN-B-001 CI tripwire (check-config-floors.mjs)', () => {
     expect(res.stderr).toContain('minStake');
     expect(res.stderr).toContain('minUnstakeDelay');
     expect(res.stderr).toMatch(/below floor/);
+  });
+});
+
+// BUN-B-010/011: the entrypoint runs as root but execs the bundler as the
+// `node` user, and upstream Config.ts fatally readFileSync's the mnemonic. A
+// root-owned 0600 mnemonic.txt is unreadable by that user → boot death. The
+// entrypoint must therefore write it owner-read-only (0400) and hand it to the
+// runtime user. (Dry-run runs unprivileged, so the guarded chown is skipped;
+// the mode is still asserted.)
+describe('BUN-B-011 mnemonic file permissions', () => {
+  it('writes mnemonic.txt mode 0400 (owner read-only)', () => {
+    const res = runEntrypoint({ BUNDLER_UNSAFE: 'false', GATE_REQUIRE_API_KEY: 'false' });
+    expect(res.status).toBe(0);
+    const mode = statSync(join(res.cfgDir, 'mnemonic.txt')).mode & 0o777;
+    expect(mode).toBe(0o400);
+  });
+
+  it('writes bundler.config.json without world-read (<=0640)', () => {
+    const res = runEntrypoint({ BUNDLER_UNSAFE: 'false', GATE_REQUIRE_API_KEY: 'false' });
+    expect(res.status).toBe(0);
+    const mode = statSync(join(res.cfgDir, 'bundler.config.json')).mode & 0o777;
+    expect(mode & 0o007).toBe(0); // no world permissions
+    expect(mode).toBe(0o640);
   });
 });
 

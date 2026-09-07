@@ -8,7 +8,7 @@
  */
 
 import { log } from './log.js';
-import type { Metrics } from './metrics.js';
+import { weiToSalt, type Metrics } from './metrics.js';
 import { readAccountBalance, readPaymasterDeposit } from './precheck.js';
 
 export interface AlertWatcherArgs {
@@ -26,6 +26,7 @@ export interface AlertWatcherArgs {
 export class AlertWatcher {
   private timer?: NodeJS.Timeout;
   private breached = new Set<string>();
+  private ticking = false;
 
   constructor(private readonly args: AlertWatcherArgs) {}
 
@@ -44,6 +45,19 @@ export class AlertWatcher {
 
   /** One sampling pass — exported for tests. */
   async tick(): Promise<void> {
+    // BUN-B-014: a chain RPC read that takes longer than the interval must not
+    // let the next timer fire overlap this one (unbounded concurrent reads +
+    // duplicated webhook work). Skip if a tick is already in flight.
+    if (this.ticking) return;
+    this.ticking = true;
+    try {
+      await this.sample();
+    } finally {
+      this.ticking = false;
+    }
+  }
+
+  private async sample(): Promise<void> {
     const { args } = this;
     if (args.paymaster && args.entryPoint) {
       try {
@@ -52,7 +66,7 @@ export class AlertWatcher {
           paymaster: args.paymaster,
           entryPoint: args.entryPoint,
         });
-        args.metrics.setGauge('bundler_gate_paymaster_deposit_wei', Number(deposit));
+        args.metrics.setGauge('bundler_gate_paymaster_deposit_salt', weiToSalt(deposit));
         await this.threshold(
           'paymaster-deposit',
           deposit,
@@ -66,7 +80,7 @@ export class AlertWatcher {
     if (args.operatorAddress) {
       try {
         const balance = await readAccountBalance(args.chainRpcUrl, args.operatorAddress);
-        args.metrics.setGauge('bundler_gate_operator_balance_wei', Number(balance));
+        args.metrics.setGauge('bundler_gate_operator_balance_salt', weiToSalt(balance));
         await this.threshold(
           'operator-balance',
           balance,

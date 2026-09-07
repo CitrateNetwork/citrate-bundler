@@ -89,13 +89,13 @@ curl -s https://bundler.citrate.ai/health
 # → ok
 
 # JSON-RPC chainId (proves bundler ↔ chain RPC works).
-curl -s -X POST https://bundler.citrate.ai/ \
+curl -s -X POST https://bundler.citrate.ai/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_chainId","params":[],"id":1}'
 # → {"jsonrpc":"2.0","id":1,"result":"0x9d0c"}   (40204 in hex)
 
 # Supported EntryPoints.
-curl -s -X POST https://bundler.citrate.ai/ \
+curl -s -X POST https://bundler.citrate.ai/rpc \
   -H 'content-type: application/json' \
   -d '{"jsonrpc":"2.0","method":"eth_supportedEntryPoints","params":[],"id":1}'
 # → {"jsonrpc":"2.0","id":1,"result":["0x..."]}  ← matches BUNDLER_ENTRYPOINT
@@ -150,8 +150,13 @@ and the bundler to:
 
 - Validate `Authorization: Bearer bk_…` against a Redis-backed key set
   minted by `auth.citrate.ai`.
-- Pre-check paymaster budget via `CitratePaymaster.remainingStandard(account)`
-  so the bundler doesn't waste cycles on already-over-budget UserOps.
+- Pre-check paymaster eligibility so the bundler doesn't waste cycles on
+  doomed UserOps: the shipped gate calls `CitratePaymaster.isRegistered(sender)`
+  and checks the paymaster holds a non-zero `EntryPoint` deposit (DOC4). A
+  per-account spend budget is NOT consulted at the edge — that cap is enforced
+  authoritatively on-chain by the paymaster during `validatePaymasterUserOp`.
+  On a chain-RPC error the pre-check fails CLOSED by default (BUN-B-006); set
+  `GATE_PRECHECK_FAIL_OPEN=true` to trade that cost control for availability.
 - Surface structured rate-limit / budget rejections to clients with
   the exact JSON-RPC shape the SDK expects.
 

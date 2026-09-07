@@ -119,7 +119,12 @@ COPY --from=builder --chown=node:node /build/bundler /app
 # boot rather than baking it in so secrets stay out of the image.
 USER root
 COPY --chown=root:root scripts/citrate-bundler-entrypoint.sh /usr/local/bin/citrate-bundler-entrypoint.sh
-RUN chmod 0755 /usr/local/bin/citrate-bundler-entrypoint.sh && apk add --no-cache su-exec || true
+# BUN-B-010: the entrypoint runs as root only long enough to template the
+# config + drop privilege via busybox `su`; it must fail loudly if it cannot be
+# made executable. The previous `&& apk add --no-cache su-exec || true`
+# installed a tool the script never uses AND the `|| true` masked a failed
+# chmod — both removed.
+RUN chmod 0755 /usr/local/bin/citrate-bundler-entrypoint.sh
 
 EXPOSE 3000
 

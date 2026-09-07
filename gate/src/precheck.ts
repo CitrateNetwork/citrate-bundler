@@ -24,7 +24,19 @@ export interface PrecheckArgs {
   chainRpcUrl: string;
   paymaster: string;
   entryPoint?: string;
+  /**
+   * BUN-B-006: whether a chain-RPC error should skip the pre-check (fail OPEN)
+   * or reject the op (fail CLOSED). The pre-check is a COST control — with a
+   * bundler that submits one on-chain `handleOps` per op, a skipped check means
+   * the operator EOA pays gas for ops that on-chain validation will reject.
+   * Defaults to fail CLOSED; set true only as a deliberate, recorded risk
+   * acceptance (availability over cost).
+   */
+  failOpen?: boolean;
 }
+
+/** BUN-B-014: bound each chain read so a slow/wedged RPC cannot pin the handler. */
+const CHAIN_CALL_TIMEOUT_MS = 5_000;
 
 export interface RpcUserOpLike {
   sender?: string;
@@ -51,6 +63,7 @@ async function ethCall(
       method: 'eth_call',
       params: [{ to, data }, 'latest'],
     }),
+    signal: AbortSignal.timeout(CHAIN_CALL_TIMEOUT_MS),
   });
   const body = (await res.json()) as { result?: string; error?: { message: string } };
   if (body.error) throw new Error(body.error.message);
@@ -64,9 +77,10 @@ function pad32(addr: string): string {
 /**
  * Pre-check a UserOperation that names OUR paymaster. Ops paying their
  * own gas (no paymaster field) pass through untouched. Chain
- * unreachability fails OPEN with a logged reason — the on-chain
- * validation is still authoritative; the pre-check is an optimization,
- * not a security boundary.
+ * unreachability fails CLOSED by default (BUN-B-006) — the pre-check is a
+ * cost control on a bundler that submits one on-chain tx per op, so a
+ * skipped check is a paid-for revert; set `failOpen` to trade that cost
+ * risk for availability.
  */
 export async function precheckUserOp(
   cfg: PrecheckArgs,
@@ -78,10 +92,17 @@ export async function precheckUserOp(
   if (!op.sender) {
     return { ok: false, reason: 'userOp.sender missing' };
   }
-  const category = op.paymasterData && op.paymasterData.length >= 4
-    ? parseInt(op.paymasterData.slice(2, 4), 16)
-    : undefined;
-  if (category === undefined || Number.isNaN(category)) {
+  // BUN-B-006: validate the whole field is 0x-prefixed hex with at least one
+  // byte BEFORE parsing the category — `parseInt('0z', 16)` silently yields 0,
+  // so a malformed category byte would otherwise pass the `category > 2` guard.
+  if (!op.paymasterData || !/^0x[0-9a-fA-F]{2,}$/.test(op.paymasterData)) {
+    return {
+      ok: false,
+      reason: 'paymasterData must be 0x-prefixed hex carrying the CitratePaymaster category byte',
+    };
+  }
+  const category = parseInt(op.paymasterData.slice(2, 4), 16);
+  if (Number.isNaN(category)) {
     return {
       ok: false,
       reason: 'paymasterData must carry the CitratePaymaster category byte',
@@ -118,11 +139,16 @@ export async function precheckUserOp(
     }
     return { ok: true };
   } catch (err) {
-    // Fail open: the EntryPoint re-validates everything on-chain.
-    return {
-      ok: true,
-      reason: `precheck skipped (chain unreachable: ${(err as Error).message})`,
-    };
+    // BUN-B-006: default fail CLOSED. Correctness is not the concern (the
+    // EntryPoint re-validates on-chain); COST is — a skipped pre-check on a
+    // one-op-per-tx bundler burns operator gas on ops the chain will reject,
+    // and an attacker can force the RPC error by hammering the same chain RPC
+    // the pre-check calls. Only skip (fail open) when explicitly configured.
+    const reason = `precheck unavailable (chain unreachable: ${(err as Error).message})`;
+    if (cfg.failOpen) {
+      return { ok: true, reason: `${reason} — failing open per config` };
+    }
+    return { ok: false, reason };
   }
 }
 
@@ -154,6 +180,7 @@ export async function readAccountBalance(
       method: 'eth_getBalance',
       params: [address, 'latest'],
     }),
+    signal: AbortSignal.timeout(CHAIN_CALL_TIMEOUT_MS),
   });
   const body = (await res.json()) as { result?: string; error?: { message: string } };
   if (body.error) throw new Error(body.error.message);
