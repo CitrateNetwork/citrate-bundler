@@ -53,8 +53,20 @@ fi
 
 mkdir -p "${CFG_DIR}"
 
+# The runtime user the bundler is exec'd as (see the `exec su` at the bottom).
+RUNTIME_USER="${CITRATE_RUNTIME_USER:-node}"
+
 printf '%s\n' "${MNEMONIC}" > "${CFG_DIR}/mnemonic.txt"
-chmod 0600 "${CFG_DIR}/mnemonic.txt"
+# BUN-B-011: this entrypoint runs as root but execs the bundler as `${RUNTIME_USER}`,
+# and upstream Config.ts does a fatal `fs.readFileSync(mnemonic)`. A root-owned
+# 0600 mnemonic.txt is UNREADABLE by that user, so the container would die on
+# boot. Hand the file to the runtime user and lock it to owner-read-only (0400),
+# which also fixes BUN-B-010's over-broad 0600. Only root can chown, so the
+# chown is guarded (dry-run tests run unprivileged and simply skip it).
+if [ "$(id -u)" = "0" ]; then
+  chown "${RUNTIME_USER}:${RUNTIME_USER}" "${CFG_DIR}/mnemonic.txt"
+fi
+chmod 0400 "${CFG_DIR}/mnemonic.txt"
 
 # ERC-7562 reputation floors (constant table): an entity is "staked" only
 # when it locks >= MIN_STAKE_VALUE for >= MIN_UNSTAKE_DELAY. Shipping
@@ -80,6 +92,13 @@ cat > "${CFG_DIR}/bundler.config.json" <<JSON
   "autoBundleMempoolSize": 10
 }
 JSON
+
+# BUN-B-010/011: the generated config is also read by the runtime user; hand it
+# over and drop it from world-readable (0644) to owner+group (0640).
+if [ "$(id -u)" = "0" ]; then
+  chown "${RUNTIME_USER}:${RUNTIME_USER}" "${CFG_DIR}/bundler.config.json"
+fi
+chmod 0640 "${CFG_DIR}/bundler.config.json"
 
 # Build the flag list. --unsafe is conditional (see boot guard above).
 # `--auto` enables the autobundling loop (otherwise the bundler accepts
