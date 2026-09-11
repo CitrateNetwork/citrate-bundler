@@ -1,5 +1,7 @@
 # citrate-bundler
 
+*Part of the **[Citrate Network](https://citrate.ai)** — own the means of computation. · [Docs](https://docs.citrate.ai) · [Run a node](https://citrate.ai/download) · [Contribute → free membership](https://github.com/CitrateNetwork/.github/blob/main/CONTRIBUTING.md)*
+
 > The ERC-4337 v0.7 bundler for the Citrate Network — a self-hosted eth-infinitism
 > bundler behind a Citrate auth/rate-limit/paymaster-pre-check gate, submitting
 > UserOperations to the chain's EntryPoint so passkey/AA wallets transact without
