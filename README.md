@@ -1,86 +1,152 @@
----
-created: 2026-06-05T07:30:00Z
-branch: main
-author: Larry Klosowski (@SaulBuilds) + Claude Opus 4.7 (1M context)
-status: active
----
-
 # citrate-bundler
 
-ERC-4337 v0.7 bundler service serving `bundler.citrate.ai`. Self-hosted
-upstream eth-infinitism reference bundler (Apache 2.0) behind Caddy, with
-a thin Citrate auth/pre-check sidecar landing in a follow-up commit.
+*Part of the **[Citrate Network](https://citrate.ai)** — own the means of computation. · [Docs](https://docs.citrate.ai) · [Run a node](https://citrate.ai/download) · [Contribute → free membership](https://github.com/CitrateNetwork/.github/blob/main/CONTRIBUTING.md)*
 
-Part of EW-S1 (the embedded-wallet sprint). Lives on its own DigitalOcean
-droplet so a bundler outage cannot take down `auth.citrate.ai` or the
-gateway.
+> The ERC-4337 v0.7 bundler for the Citrate Network — a self-hosted eth-infinitism
+> bundler behind a Citrate auth/rate-limit/paymaster-pre-check gate, submitting
+> UserOperations to the chain's EntryPoint so passkey/AA wallets transact without
+> holding gas.
 
-## Quick links
+## What it is
 
-- Sprint planset:
-  `citrate-federation/.agentile/planset/2026-06-05-ew-s1-passkey-aa.md`
-- Topology ADR:
-  `citrate-federation/.agentile/adrs/ADR-2026-06-05-ew-bundler-topology.md`
-- Paymaster policy ADR (informs the pre-check):
-  `citrate-federation/.agentile/adrs/ADR-2026-06-05-ew-paymaster-policy.md`
-- On-chain contracts:
-  `citrate-chain/contracts/src/aa/`
+`citrate-bundler` is a Docker-compose stack of four services: the upstream
+**eth-infinitism** bundler (Apache-2.0, vendored unmodified), a thin Citrate
+**gate** sidecar (`bk_` API keys, per-IP + per-key rate limits, a paymaster
+pre-check, `/metrics`), **Redis** (the gate's counters + pre-check cache), and
+**Caddy** (public TLS + edge rate limit). It submits batched UserOps to the
+ERC-4337 v0.7 **EntryPoint** deployed on chain **40204**, paying gas from a funded
+operator EOA that users' paymaster/UserOp reimburses.
 
-## What runs here
+- Concept docs: https://docs.citrate.ai/account-abstraction
+- Depends on a [citrate-chain](https://github.com/CitrateNetwork/citrate-chain) RPC
+  plus the deployed AA stack (EntryPoint v0.7 + `CitratePaymaster`).
 
-```
-client (browser / SDK / gui-native / wallet-extension)
-   │  HTTPS  JSON-RPC POST
-   ▼
-Caddy on bundler.citrate.ai
-   │ HTTP loopback, with per-IP and per-API-key rate limit
-   ▼
-citrate-bundler-auth (Node sidecar — WP-4 slice B)
-   │ HTTP loopback, after Bearer auth + paymaster pre-check
-   ▼
-eth-infinitism bundler (Node service)
-   │ JSON-RPC
-   ▼
-citrate-chain RPC at rpc.citrate.ai
+## Prerequisites
+
+```bash
+# Docker + Compose v2
+# https://docs.docker.com/engine/install/  (then `docker compose version`)
+
+# For local gate development only (optional): Node 20 + npm
+#   node --version   # v20.x
+
+# Tools for the smoke test
+sudo apt-get install -y curl jq
 ```
 
-## Public endpoints
+## Build from source
 
+The bundler and gate images build from this repo's Dockerfiles (the bundler
+Dockerfile vendors the eth-infinitism reference bundler; the gate is a TypeScript
+service):
+
+```bash
+git clone https://github.com/CitrateNetwork/citrate-bundler
+cd citrate-bundler
+
+docker compose build           # builds the bundler + gate images
+
+# Iterate on the gate alone:
+cd gate && npm install && npm run dev    # tsx dev server on GATE_PORT (3001)
 ```
-POST  https://bundler.citrate.ai/rpc     — JSON-RPC 2.0 (the gate also accepts POST /)
-GET   https://bundler.citrate.ai/health  — Caddy liveness ("ok")
-GET   https://bundler.citrate.ai/healthz — composite health (upstream + Redis)
+
+## Run locally
+
+1. Copy the env template and fill it for a **local** chain:
+
+```bash
+cp .env.production.example .env
 ```
 
-The gate enforces an explicit method allow-list (BUN-B-012): the public
-ERC-4337 surface only —
+Set, at minimum:
 
-- `eth_sendUserOperation`, `eth_estimateUserOperationGas`,
-  `eth_getUserOperationByHash`, `eth_getUserOperationReceipt`,
-  `eth_supportedEntryPoints`, `eth_chainId`, `web3_clientVersion`.
+```dotenv
+BUNDLER_HOST=localhost
+BUNDLER_NETWORK_RPC=http://host.docker.internal:8545   # your local citrate-chain devnet RPC
+BUNDLER_ENTRYPOINT=<EntryPoint v0.7 address deployed on chain 40204>
+BUNDLER_MNEMONIC=<BIP-39 mnemonic of a funded operator EOA>   # openssl rand -hex 32 -> BIP-39
+REDIS_PASSWORD=<openssl rand -hex 32>
+CITRATE_AA_PAYMASTER=<CitratePaymaster address on chain 40204>
+GATE_REQUIRE_API_KEY=true         # see the boot guard below
+BUNDLER_UNSAFE=true               # chain 40204 has no debug_traceCall yet
+```
 
-Everything else (including the upstream `debug_bundler_*` family) is rejected
-at the edge with `-32601`.
+2. Bring the stack up:
 
-> **Not implemented:** `citrate_getUserAddress(userId)` was advertised in an
-> earlier draft but has no implementation and is not on the allow-list. Smart-
-> wallet address prediction is done client-side via
-> `citrate-wallet-aa::predict_address` (Rust) / `CitrateWalletFactory.predictAddress`
-> (on-chain), not through the bundler.
+```bash
+docker compose up -d --build
+docker compose ps
+docker compose logs -f bundler gate caddy
+```
 
-## Deploy
+3. Verify — the smoke test asserts the bundler answers, is on chain `0x9d0c`
+   (40204), and supports your EntryPoint. Point it at the running stack (publish
+   the bundler port for a direct local check, or run it from inside the network):
 
-See [DEPLOY.md](DEPLOY.md). Initial droplet provisioned 2026-06-05:
+```bash
+# From inside the compose network:
+docker compose exec bundler sh -c \
+  'wget -qO- --post-data="{\"jsonrpc\":\"2.0\",\"method\":\"eth_supportedEntryPoints\",\"params\":[],\"id\":1}" \
+   --header="Content-Type: application/json" http://localhost:3000/rpc'
 
-| Thing | Value |
-|---|---|
-| Droplet | `citrate-bundler` |
-| Region | nyc1 |
-| Size | `s-2vcpu-4gb` ($24/mo) |
-| Public IPv4 | `159.223.174.220` |
-| SSH | `ssh -i ~/.ssh/citrate-do root@159.223.174.220` (same key as `citrate-rpc-1` + `citrate-identity`) |
+# Or run the bundled smoke script against a locally-exposed bundler:
+BUNDLER_URL=http://localhost:3000 EXPECTED_CHAIN_ID_HEX=0x9d0c bash scripts/smoke.sh
+```
+
+Public endpoints (through Caddy → gate → bundler): `POST /rpc` (JSON-RPC 2.0),
+`GET /health` (Caddy liveness "ok"), `GET /healthz` (composite). The gate enforces
+a strict ERC-4337 method allow-list; `debug_bundler_*` and everything else are
+rejected at the edge with `-32601`.
+
+> **Boot guard (BUN-B-001):** an `--unsafe` bundler on an anonymous `/rpc` door is
+> a funds-loss DoS. The stack **refuses to boot** when `BUNDLER_UNSAFE=true` AND
+> `GATE_REQUIRE_API_KEY!=true`. For local dev keep `GATE_REQUIRE_API_KEY=true`
+> (mint a `bk_` key) — or bypass the gate entirely by hitting the bundler on
+> `:3000` directly.
+
+## Connect it locally  ← the differentiator
+
+The bundler's upstream is the **local chain RPC + its deployed EntryPoint**. Order:
+
+1. Start a devnet node from
+   [citrate-chain](https://github.com/CitrateNetwork/citrate-chain):
+   `./target/release/citrate devnet` → `http://localhost:8545`.
+2. Deploy the AA stack to that chain (from citrate-chain: the
+   `contracts/script/aa/` scripts / `DeployAA`). Record the printed **EntryPoint
+   v0.7** and **CitratePaymaster** addresses.
+3. Put those in `.env` (`BUNDLER_ENTRYPOINT`, `CITRATE_AA_PAYMASTER`) and set
+   `BUNDLER_NETWORK_RPC` to the chain RPC as reachable from the container
+   (`http://host.docker.internal:8545`, or the host IP on Linux).
+4. Fund the operator EOA (from `BUNDLER_MNEMONIC`) with native SALT on the devnet
+   so it can pay batch gas — e.g. a transfer from the pre-funded Hardhat account #0.
+5. `docker compose up -d --build`, then run the smoke check above.
+
+See the full multi-repo bring-up: https://docs.citrate.ai/local-stack
+
+## Configuration
+
+Everything is env-driven via `.env` (template: `.env.production.example`):
+
+- `BUNDLER_NETWORK_RPC` — chain-40204 JSON-RPC the bundler submits to.
+- `BUNDLER_ENTRYPOINT` — EntryPoint v0.7 address on chain 40204.
+- `BUNDLER_MNEMONIC` / `BUNDLER_OPERATOR_ADDRESS` — the funded operator EOA.
+- `CITRATE_AA_PAYMASTER` — `CitratePaymaster` address (enables the pre-check + deposit gauge).
+- `GATE_REQUIRE_API_KEY`, `BUNDLER_UNSAFE` — must agree per the boot guard.
+- `GATE_IP_LIMIT_PER_MINUTE` (60), `GATE_KEY_LIMIT_PER_MINUTE` (600), `REDIS_PASSWORD`.
+- Ports (internal to the compose network): bundler `3000`, gate `3001`, Caddy `80/443`.
+
+Deploy/ops runbook: [DEPLOY.md](DEPLOY.md).
+
+## Links
+
+- Docs: https://docs.citrate.ai/account-abstraction
+- Depends on: [citrate-chain](https://github.com/CitrateNetwork/citrate-chain) (RPC + AA stack) ·
+  Consumed by: passkey/AA wallets, SDKs, gui-native
+- Contributing (DCO): CONTRIBUTING.md · Security: SECURITY.md · License: LICENSE
 
 ## License
 
-MIT. Upstream eth-infinitism bundler is Apache 2.0; we vendor it as a
-Docker image without modification in this slice.
+Source-available (BUSL-1.1) — free for personal/non-commercial use;
+commercial/hosted use requires a membership license. This is not an open-source
+license. (The vendored eth-infinitism reference bundler is upstream Apache-2.0 and
+is used unmodified.)
