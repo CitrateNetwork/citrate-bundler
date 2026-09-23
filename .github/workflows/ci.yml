@@ -6,6 +6,7 @@ name: ci
 # best-effort. Tune script inputs on first green run once Actions billing is back.
 
 on:
+  workflow_dispatch:
   push:
     branches: [main]
   pull_request: {}
