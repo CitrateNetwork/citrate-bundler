@@ -78,7 +78,7 @@ Caddy will pull a Let's Encrypt certificate on first boot once DNS
 resolves. If the cert is staging-fallback'd (LE prod intermittent),
 clear `caddy_data` + `caddy_config` volumes and restart Caddy (same
 gotcha + fix as `auth.citrate.ai`'s deploy; see
-`citrate-labs/handoffs/IDENTITY_DEPLOY_HANDOFF.md` §"Known operational
+`handoffs/IDENTITY_DEPLOY_HANDOFF.md` §"Known operational
 gotcha").
 
 ## Verify
