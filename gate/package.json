@@ -1,6 +1,7 @@
 {
   "name": "citrate-bundler-gate",
   "version": "0.1.0",
+  "license": "Apache-2.0",
   "private": true,
   "description": "Auth + rate-limit + paymaster-precheck + metrics gate in front of the eth-infinitism bundler (EW-S1 WP-4 slice B)",
   "type": "module",
