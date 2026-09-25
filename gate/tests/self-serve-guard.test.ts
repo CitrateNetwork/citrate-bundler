@@ -70,6 +70,24 @@ describe('PBA-L3b-I04 entrypoint guard', () => {
     }
   });
 
+  it('treats a set-but-empty value as on, agreeing with the gate', () => {
+    const res = runEntrypoint({
+      BUNDLER_UNSAFE: 'true',
+      GATE_REQUIRE_API_KEY: 'true',
+      GATE_SELF_SERVE_KEYS: '',
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain('PBA-L3b-I04');
+    expect(() =>
+      loadConfig({
+        GATE_REDIS_URL: 'redis://localhost:6379',
+        NODE_ENV: 'test',
+        BUNDLER_UNSAFE: 'true',
+        GATE_SELF_SERVE_KEYS: '',
+      }),
+    ).toThrow(/PBA-L3b-I04/);
+  });
+
   it('fails closed on a value it does not understand', () => {
     const res = runEntrypoint({
       BUNDLER_UNSAFE: 'true',
