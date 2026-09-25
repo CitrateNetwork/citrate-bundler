@@ -103,6 +103,12 @@ rejected at the edge with `-32601`.
 > `GATE_REQUIRE_API_KEY!=true`. For local dev keep `GATE_REQUIRE_API_KEY=true`
 > (mint a `bk_` key) — or bypass the gate entirely by hitting the bundler on
 > `:3000` directly.
+>
+> **Self-serve keys (PBA-L3b-I04):** a `bk_` key anyone can mint for themselves
+> is an anonymous door with one extra step. Both the bundler entrypoint and the
+> gate **refuse to boot** when `GATE_SELF_SERVE_KEYS` is on (anything but `false`)
+> while `BUNDLER_UNSAFE` is not `false`. Turn on the auth.citrate.ai self-serve
+> minting surface only after the bundler runs without `--unsafe`.
 
 ## Connect it locally  ← the differentiator
 
@@ -131,7 +137,7 @@ Everything is env-driven via `.env` (template: `.env.production.example`):
 - `BUNDLER_ENTRYPOINT` — EntryPoint v0.7 address on chain 40204.
 - `BUNDLER_MNEMONIC` / `BUNDLER_OPERATOR_ADDRESS` — the funded operator EOA.
 - `CITRATE_AA_PAYMASTER` — `CitratePaymaster` address (enables the pre-check + deposit gauge).
-- `GATE_REQUIRE_API_KEY`, `BUNDLER_UNSAFE` — must agree per the boot guard.
+- `GATE_REQUIRE_API_KEY`, `BUNDLER_UNSAFE`, `GATE_SELF_SERVE_KEYS` (default `false`) — must agree per the boot guards.
 - `GATE_IP_LIMIT_PER_MINUTE` (60), `GATE_KEY_LIMIT_PER_MINUTE` (600), `REDIS_PASSWORD`.
 - Ports (internal to the compose network): bundler `3000`, gate `3001`, Caddy `80/443`.
 
