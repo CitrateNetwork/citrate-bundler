@@ -56,8 +56,10 @@ fi
 # auth.citrate.ai self-serve surface) rather than only by the operator. A key
 # anyone can mint for themselves is not a gate, so with --unsafe it reopens the
 # BUN-B-001 funds-loss DoS above. Refuse that combination outright. Anything but
-# an explicit "false" (or unset) counts as on, so a typo fails closed.
-: "${GATE_SELF_SERVE_KEYS:=false}"
+# an explicit "false" (or unset) counts as on, so a typo fails closed. `=` not
+# `:=`: a variable that is SET but empty stays empty and so counts as on, the
+# same verdict the gate's loadConfig reaches (verifier nit on PBA-L3b-I04).
+: "${GATE_SELF_SERVE_KEYS=false}"
 if [ "${BUNDLER_UNSAFE}" = "true" ] && [ "${GATE_SELF_SERVE_KEYS}" != "false" ]; then
   echo "FATAL [PBA-L3b-I04]: refusing to start." >&2
   echo "  GATE_SELF_SERVE_KEYS=${GATE_SELF_SERVE_KEYS} with --unsafe: a bk_ key anyone can" >&2
