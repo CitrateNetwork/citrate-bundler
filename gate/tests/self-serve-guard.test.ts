@@ -90,6 +90,10 @@ describe('PBA-L3b-I04 gate config guard', () => {
         loadConfig({ ...base, NODE_ENV, BUNDLER_UNSAFE: 'true', GATE_SELF_SERVE_KEYS: 'true' }),
       ).toThrow(/PBA-L3b-I04/);
     }
+    // The refusal names both ways out, so an operator can act on it.
+    expect(() =>
+      loadConfig({ ...base, NODE_ENV: 'test', BUNDLER_UNSAFE: 'true', GATE_SELF_SERVE_KEYS: 'true' }),
+    ).toThrow(/anonymous front door[\s\S]*BUN-B-001[\s\S]*GATE_SELF_SERVE_KEYS=false[\s\S]*BUNDLER_UNSAFE=false/);
   });
 
   it('treats an unset BUNDLER_UNSAFE as unsafe (the compose default is true)', () => {
