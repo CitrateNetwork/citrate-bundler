@@ -50,6 +50,12 @@ export interface GateConfig {
    * untrusted origin cannot mint a fresh rate-limit bucket.
    */
   trustedProxies: string[];
+  /**
+   * PBA-L3b-I04: whether `bk_` keys can be self-minted (auth.citrate.ai
+   * self-serve) rather than only operator-issued. Never true while the
+   * bundler runs `--unsafe`; `loadConfig` refuses that combination.
+   */
+  selfServeKeys: boolean;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): GateConfig {
@@ -91,6 +97,23 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GateConfig {
     );
   }
 
+  // PBA-L3b-I04: self-serve key minting turns "API key required" into an
+  // anonymous front door with one extra step, which BUN-B-001 forbids while the
+  // bundler runs --unsafe. Unlike the gaps above this is not a dev-mode warning:
+  // it is refused in every environment. BUNDLER_UNSAFE mirrors the bundler
+  // container's value; unset counts as unsafe (the compose default is true).
+  // Anything but an explicit "false" enables self-serve, so a typo fails closed.
+  const bundlerUnsafe = (env.BUNDLER_UNSAFE ?? 'true') !== 'false';
+  const selfServeKeys = (env.GATE_SELF_SERVE_KEYS ?? 'false') !== 'false';
+  if (bundlerUnsafe && selfServeKeys) {
+    throw new Error(
+      '[PBA-L3b-I04] Refusing to start the bundler gate: GATE_SELF_SERVE_KEYS is on while ' +
+        'BUNDLER_UNSAFE is not false. A bk_ key anyone can mint is an anonymous front door ' +
+        'to a bundler with no ERC-7562 checking (BUN-B-001). Set GATE_SELF_SERVE_KEYS=false, ' +
+        'or run the bundler with BUNDLER_UNSAFE=false.',
+    );
+  }
+
   if (isProd && problems.length > 0) {
     throw new Error(
       'Refusing to start the bundler gate in production with unsafe config:\n  - ' +
@@ -113,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): GateConfig {
       ? { operatorAddress: env.BUNDLER_OPERATOR_ADDRESS.trim() }
       : {}),
     requireApiKey,
+    selfServeKeys,
     ipLimitPerMinute: intEnv(env.GATE_IP_LIMIT_PER_MINUTE, 60),
     keyLimitPerMinute: intEnv(env.GATE_KEY_LIMIT_PER_MINUTE, 600),
     precheckFailOpen: (env.GATE_PRECHECK_FAIL_OPEN ?? 'false') === 'true',

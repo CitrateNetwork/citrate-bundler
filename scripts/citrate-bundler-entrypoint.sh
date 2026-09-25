@@ -51,6 +51,23 @@ if [ "${BUNDLER_UNSAFE}" = "true" ] && [ "${GATE_REQUIRE_API_KEY}" != "true" ]; 
   exit 1
 fi
 
+# ---- PBA-L3b-I04 boot guard ------------------------------------------------
+# GATE_SELF_SERVE_KEYS declares that bk_ keys can be minted by anyone (the
+# auth.citrate.ai self-serve surface) rather than only by the operator. A key
+# anyone can mint for themselves is not a gate, so with --unsafe it reopens the
+# BUN-B-001 funds-loss DoS above. Refuse that combination outright. Anything but
+# an explicit "false" (or unset) counts as on, so a typo fails closed.
+: "${GATE_SELF_SERVE_KEYS:=false}"
+if [ "${BUNDLER_UNSAFE}" = "true" ] && [ "${GATE_SELF_SERVE_KEYS}" != "false" ]; then
+  echo "FATAL [PBA-L3b-I04]: refusing to start." >&2
+  echo "  GATE_SELF_SERVE_KEYS=${GATE_SELF_SERVE_KEYS} with --unsafe: a bk_ key anyone can" >&2
+  echo "  mint is an anonymous front door, which BUN-B-001 forbids for --unsafe." >&2
+  echo "  Fix ONE of:" >&2
+  echo "    - GATE_SELF_SERVE_KEYS=false  (operator-issued keys only), or" >&2
+  echo "    - BUNDLER_UNSAFE=false        (once chain 40204 exposes debug_traceCall)." >&2
+  exit 1
+fi
+
 mkdir -p "${CFG_DIR}"
 
 # The runtime user the bundler is exec'd as (see the `exec su` at the bottom).

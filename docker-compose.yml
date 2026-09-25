@@ -38,6 +38,9 @@ services:
       # until the operator picks a safe combination.
       BUNDLER_UNSAFE: ${BUNDLER_UNSAFE:-true}
       GATE_REQUIRE_API_KEY: ${GATE_REQUIRE_API_KEY:-true}
+      # PBA-L3b-I04: self-serve bk_ minting is refused while --unsafe is on
+      # (both here and in the gate). Must match the gate service below.
+      GATE_SELF_SERVE_KEYS: ${GATE_SELF_SERVE_KEYS:-false}
     expose:
       - "3000"
     depends_on:
@@ -62,6 +65,9 @@ services:
       CITRATE_AA_PAYMASTER: ${CITRATE_AA_PAYMASTER}
       BUNDLER_OPERATOR_ADDRESS: ${BUNDLER_OPERATOR_ADDRESS:-}
       GATE_REQUIRE_API_KEY: ${GATE_REQUIRE_API_KEY:-true}
+      # PBA-L3b-I04: the gate re-checks the bundler's posture at boot.
+      BUNDLER_UNSAFE: ${BUNDLER_UNSAFE:-true}
+      GATE_SELF_SERVE_KEYS: ${GATE_SELF_SERVE_KEYS:-false}
       GATE_IP_LIMIT_PER_MINUTE: ${GATE_IP_LIMIT_PER_MINUTE:-60}
       GATE_KEY_LIMIT_PER_MINUTE: ${GATE_KEY_LIMIT_PER_MINUTE:-600}
       GATE_ALERT_WEBHOOK_URL: ${GATE_ALERT_WEBHOOK_URL:-}
