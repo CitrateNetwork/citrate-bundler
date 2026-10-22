@@ -344,6 +344,30 @@ describe('outbound fetch deadlines', () => {
     expect(seen.get(`${chain.url}|eth_call`)).toBeInstanceOf(AbortSignal);
   });
 
+  it('an alert tick settles even when the alert webhook never responds', async () => {
+    const hole = await startBlackHole();
+    closers.push(
+      () =>
+        new Promise<void>((r) => {
+          hole.server.closeAllConnections?.();
+          hole.server.close(() => r());
+        }),
+    );
+    const w = new AlertWatcher({
+      chainRpcUrl: chain.url,
+      operatorAddress: REGISTERED,
+      paymasterDepositAlertWei: 0n,
+      operatorBalanceAlertWei: 1n, // balance fixture is 0 -> breach -> webhook POST
+      alertWebhookUrl: hole.url,
+      metrics: createGateMetrics(),
+    });
+    const outcome = await Promise.race([
+      w.tick().then(() => 'settled'),
+      new Promise<string>((r) => setTimeout(() => r('hung'), 8_000)),
+    ]);
+    expect(outcome).toBe('settled');
+  }, 12_000);
+
   it('the gate server bounds how long a client may take to send a request', () => {
     const src = readFileSync(resolve(__dirname, '..', 'src', 'server.ts'), 'utf8');
     const main = src.slice(src.indexOf('export function main'));
