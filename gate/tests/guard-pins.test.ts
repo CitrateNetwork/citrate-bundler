@@ -17,7 +17,7 @@
 import { createServer, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -453,5 +453,45 @@ describe('entrypoint privilege drop', () => {
     const lines = execLines('cd /app\nexec sh -c "${LAUNCH}"\n');
     expect(lines).toHaveLength(1);
     expect(lines[0]).not.toMatch(DROPS_PRIVILEGE);
+  });
+});
+
+// ── tripwire: every outbound fetch in src/ carries an abort signal ──
+
+/** Return the argument text of every `fetch(` call in `src`. */
+function fetchCalls(src: string): string[] {
+  const calls: string[] = [];
+  const re = /\bfetch\(/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(src)) !== null) {
+    let depth = 1;
+    let i = m.index + m[0].length;
+    for (; i < src.length && depth > 0; i++) {
+      if (src[i] === '(') depth += 1;
+      else if (src[i] === ')') depth -= 1;
+    }
+    calls.push(src.slice(m.index, i));
+  }
+  return calls;
+}
+
+describe('tripwire: outbound fetch deadlines', () => {
+  it('every fetch( call in gate/src passes a signal', () => {
+    const dir = resolve(__dirname, '..', 'src');
+    const files = readdirSync(dir).filter((f) => f.endsWith('.ts'));
+    let total = 0;
+    for (const f of files) {
+      for (const call of fetchCalls(readFileSync(join(dir, f), 'utf8'))) {
+        total += 1;
+        expect(call, `${f}: ${call.slice(0, 80)}`).toMatch(/\bsignal\s*:/);
+      }
+    }
+    expect(total).toBeGreaterThanOrEqual(5); // five call sites today; keeps the scan from going vacuous
+  });
+
+  it('negative control: a fetch without a signal is caught', () => {
+    const calls = fetchCalls("await fetch(url, { method: 'POST', body: JSON.stringify({ a: (1) }) });");
+    expect(calls).toHaveLength(1);
+    expect(calls[0]).not.toMatch(/\bsignal\s*:/);
   });
 });
