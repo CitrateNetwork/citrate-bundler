@@ -11,6 +11,13 @@ import { log } from './log.js';
 import { weiToSalt, type Metrics } from './metrics.js';
 import { readAccountBalance, readPaymasterDeposit } from './precheck.js';
 
+/**
+ * Bound the alert webhook POST. `tick()` refuses to overlap an in-flight tick,
+ * so a webhook that accepts the connection and never answers would otherwise
+ * stall every later tick: gauges stop refreshing and no further alert fires.
+ */
+const WEBHOOK_TIMEOUT_MS = 5_000;
+
 export interface AlertWatcherArgs {
   chainRpcUrl: string;
   paymaster?: string;
@@ -120,6 +127,7 @@ export class AlertWatcher {
           threshold: limit.toString(),
           text: message,
         }),
+        signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
       });
     } catch (err) {
       log('error', 'alert webhook delivery failed', { err: String(err) });
